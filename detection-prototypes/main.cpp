@@ -22,12 +22,16 @@ void do_MOG_detection(bool* initialized, cv::Mat* frame, cv::Mat* fg_mask, cv::P
     }
 }
 
-void do_MOG2_detection(bool* initialized, cv::Mat* frame, cv::Mat* fg_mask, cv::Ptr<cv::BackgroundSubtractor> bg_sub){
+void do_MOG2_detection(bool* initialized, cv::Mat* frame, cv::Mat* fg_mask, cv::Ptr<cv::BackgroundSubtractor>* bg_sub){
     if (!*initialized) {
         std::cout << "Initializing MO2G detection" << std::endl;
-        bg_sub = cv::createBackgroundSubtractorMOG2();
+        *bg_sub = cv::createBackgroundSubtractorMOG2();
         *initialized = true;
     }
+    cv::Ptr<cv::BackgroundSubtractor> subtractor = *bg_sub;
+    subtractor->apply(*frame, *fg_mask);
+    std::cout << "MOG2" << std::endl;
+
 }
 
 void add_frame_index_overlay(cv::Mat* frame, unsigned int current_index, unsigned int last_index) {
@@ -53,6 +57,7 @@ void analysis_loop(cv::VideoCapture* capture, unsigned int analysis_type, bool s
 
     if (show_playback) {
         cv::namedWindow("Video");
+        cv::namedWindow("Foreground mask");
     }
 
     std::cout << "Starting analysis" << std::endl;
@@ -62,7 +67,7 @@ void analysis_loop(cv::VideoCapture* capture, unsigned int analysis_type, bool s
                 do_MOG_detection(&initialized, &current_frame, &fg_mask, bg_sub);
                 break;
             case MOG2:
-                do_MOG2_detection(&initialized, &current_frame, &fg_mask, bg_sub);
+                do_MOG2_detection(&initialized, &current_frame, &fg_mask, &bg_sub);
                 break;
             default:
                 std::cout << "Non-valid analysis type, aborting." << std::endl;
@@ -72,6 +77,7 @@ void analysis_loop(cv::VideoCapture* capture, unsigned int analysis_type, bool s
         if (show_playback) {
             add_frame_index_overlay(&current_frame, frame_index, total_num_frames - 1);
             cv::imshow("Video", current_frame);
+            cv::imshow("Foreground mask", fg_mask);
             cv::waitKey(24);
         }
         ++frame_index;
