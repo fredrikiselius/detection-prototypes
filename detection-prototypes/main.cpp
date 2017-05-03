@@ -30,12 +30,26 @@ void do_MOG2_detection(bool* initialized, cv::Mat* frame, cv::Mat* fg_mask, cv::
     }
 }
 
+void add_frame_index_overlay(cv::Mat* frame, unsigned int current_index, unsigned int last_index) {
+    std::string c_index = "Current: " + std::to_string(current_index);
+    std::string l_index = "Total: " + std::to_string(last_index);
+    std::vector<std::string> overlay_strings = {"Frames: ", l_index, c_index};
+    unsigned int width_indent = 15;
+    unsigned int height_indent = 25;
+
+    cv::rectangle(*frame, cv::Point(width_indent, height_indent/2-5), cv::Point(width_indent+150, height_indent*overlay_strings.size()+5), cv::Scalar(255,255,255), -1);
+    for (unsigned int i = 0; i < overlay_strings.size(); ++i) {
+        cv::putText(*frame, overlay_strings.at(i), cv::Point(width_indent,height_indent*(i+1)), cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255,0,0));
+    }
+}
+
 void analysis_loop(cv::VideoCapture* capture, unsigned int analysis_type, bool show_playback) {
     cv::Mat current_frame, fg_mask;
     cv::Ptr<cv::BackgroundSubtractor> bg_sub;
     bool abort = false;
     bool initialized = false;
     unsigned int frame_index = 0;
+    unsigned int total_num_frames = capture->get(CV_CAP_PROP_FRAME_COUNT) - 1;
 
     if (show_playback) {
         cv::namedWindow("Video");
@@ -56,6 +70,7 @@ void analysis_loop(cv::VideoCapture* capture, unsigned int analysis_type, bool s
                 break;
         }
         if (show_playback) {
+            add_frame_index_overlay(&current_frame, frame_index, total_num_frames - 1);
             cv::imshow("Video", current_frame);
             cv::waitKey(24);
         }
