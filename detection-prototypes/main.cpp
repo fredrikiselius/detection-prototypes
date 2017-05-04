@@ -12,9 +12,29 @@ enum VIDEO {DEFAULT = 1, CUSTOM = 2};
 
 // Global vars
 
+void draw_rects(std::vector<cv::Rect> rects, cv::Mat* frame, unsigned int min_area=100) {
+    for (cv::Rect r : rects) {
+        if (r.area() > min_area) {
+            cv::rectangle(*frame, r, cv::Scalar(0,255,0));
+        }
+    }
+}
 
+std::vector<cv::Rect> calc_bounding_rects(std::vector<std::vector<cv::Point>>* contours) {
+    std::vector<cv::Rect> bounding_rects;
+    for (std::vector<cv::Point> contour : *contours) {
+        bounding_rects.push_back(cv::boundingRect(contour));
+    }
+    return bounding_rects;
+}
 
-void do_MOG_detection(bool* initialized, cv::Mat* frame, cv::Mat* fg_mask, cv::Ptr<cv::BackgroundSubtractor> bg_sub){
+std::vector<std::vector<cv::Point>> find_contours(cv::Mat* search_frame) {
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(*search_frame, contours, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
+    return contours;
+}
+
+void do_MOG_detection(bool* initialized, cv::Mat* frame, cv::Mat* fg_mask, cv::Mat* dup_fg_mask,  cv::Ptr<cv::BackgroundSubtractor> bg_sub){
     if (!*initialized) {
         std::cout << "Initializing MOG detection" << std::endl;
         //bg_sub = cv::BackgroundSubtractorMOG();
@@ -22,16 +42,24 @@ void do_MOG_detection(bool* initialized, cv::Mat* frame, cv::Mat* fg_mask, cv::P
     }
 }
 
-void do_MOG2_detection(bool* initialized, cv::Mat* frame, cv::Mat* fg_mask, cv::Ptr<cv::BackgroundSubtractor>* bg_sub){
+void do_MOG2_detection(bool* initialized, cv::Mat* frame, cv::Mat* fg_mask, cv::Mat* dup_fg_mask,  cv::Ptr<cv::BackgroundSubtractor>* bg_sub, bool shadow_detect=true){
     if (!*initialized) {
         std::cout << "Initializing MO2G detection" << std::endl;
-        *bg_sub = cv::createBackgroundSubtractorMOG2();
+        *bg_sub = cv::createBackgroundSubtractorMOG2(500,16,shadow_detect);
         *initialized = true;
     }
     cv::Ptr<cv::BackgroundSubtractor> subtractor = *bg_sub;
-    subtractor->apply(*frame, *fg_mask);
-    std::cout << "MOG2" << std::endl;
+    subtractor->apply(*frame, *fg_mask); // update background model
 
+    // Reduce noise with morphological transformation
+    cv::Mat kernel=cv::getStructuringElement(cv::MORPH_ELLIPSE,cv::Size(10,10));
+    cv::morphologyEx(*fg_mask,*dup_fg_mask,CV_MOP_OPEN,kernel);
+
+
+    std::vector<std::vector<cv::Point>> contours = find_contours(dup_fg_mask);
+    std::vector<cv::Rect> rects = calc_bounding_rects(&contours);
+    cv::drawContours(*frame, contours, -1, cv::Scalar(0,0,255));
+    draw_rects(rects, frame);
 }
 
 void add_frame_index_overlay(cv::Mat* frame, unsigned int current_index, unsigned int last_index) {
@@ -47,8 +75,8 @@ void add_frame_index_overlay(cv::Mat* frame, unsigned int current_index, unsigne
     }
 }
 
-void analysis_loop(cv::VideoCapture* capture, unsigned int analysis_type, bool show_playback) {
-    cv::Mat current_frame, fg_mask;
+void analysis_loop(cv::VideoCapture* capture, unsigned int analysis_type, bool show_playback, bool save_frames=false) {
+    cv::Mat current_frame, fg_mask, dup_fg_mask;
     cv::Ptr<cv::BackgroundSubtractor> bg_sub;
     bool abort = false;
     bool initialized = false;
@@ -58,16 +86,17 @@ void analysis_loop(cv::VideoCapture* capture, unsigned int analysis_type, bool s
     if (show_playback) {
         cv::namedWindow("Video");
         cv::namedWindow("Foreground mask");
+        cv::namedWindow("Modified foreground mask");
     }
 
     std::cout << "Starting analysis" << std::endl;
     while (!abort && capture->read(current_frame)) {
         switch (analysis_type) {
             case MOG:
-                do_MOG_detection(&initialized, &current_frame, &fg_mask, bg_sub);
+                do_MOG_detection(&initialized, &current_frame, &fg_mask, &dup_fg_mask, bg_sub);
                 break;
             case MOG2:
-                do_MOG2_detection(&initialized, &current_frame, &fg_mask, &bg_sub);
+                do_MOG2_detection(&initialized, &current_frame, &fg_mask, &dup_fg_mask, &bg_sub);
                 break;
             default:
                 std::cout << "Non-valid analysis type, aborting." << std::endl;
@@ -78,7 +107,20 @@ void analysis_loop(cv::VideoCapture* capture, unsigned int analysis_type, bool s
             add_frame_index_overlay(&current_frame, frame_index, total_num_frames - 1);
             cv::imshow("Video", current_frame);
             cv::imshow("Foreground mask", fg_mask);
-            cv::waitKey(24);
+            cv::imshow("Modified foreground mask", dup_fg_mask);
+            cv::waitKey(50);
+        }
+
+        if (save_frames && frame_index % 20 == 0) {
+            std::map<std::string, cv::Mat> frames;
+            frames["ori_" + std::to_string(frame_index) + ".png"] = current_frame;
+            frames["fg_" + std::to_string(frame_index) + ".png"] = fg_mask;
+            frames["fg_dup_" + std::to_string(frame_index) + ".png"] = dup_fg_mask;
+            for (auto &ent : frames) {
+                cv::imwrite(ent.first, ent.second, {CV_IMWRITE_PNG_COMPRESSION, 9});
+            }
+
+
         }
         ++frame_index;
     }
@@ -89,7 +131,7 @@ void start_analysis(std::string file_path, unsigned int analysis_type, bool show
     cv::VideoCapture *capture = new cv::VideoCapture(file_path);
     if (capture->isOpened()) {
         std::cout << "Found video. Starting analysis." << std::endl;
-        analysis_loop(capture, analysis_type, show_playback);
+        analysis_loop(capture, analysis_type, show_playback, true);
         capture->release();
     } else {
         std::cout << "Could not open video. Exiting." << std::endl;
@@ -108,7 +150,7 @@ int main(int argc, char *argv[]) {
 
     switch (video_choice) {
         case DEFAULT:
-            video_path = "seq_01.mp4";
+            video_path = "vid_01.mp4";
             break;
         case CUSTOM:
             std::cout << "Enter the file path: ";
